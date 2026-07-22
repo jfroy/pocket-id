@@ -114,6 +114,24 @@ func (s *AppConfigService) GetCIMDURLAllowlist() []string {
 	return patterns
 }
 
+// GetDynamicClientRedirectUriAllowlist returns the redirect-URI patterns a
+// dynamically-registered client may declare. An empty slice denies all (fail-closed).
+func (s *AppConfigService) GetDynamicClientRedirectUriAllowlist() []string {
+	cfg, err := s.GetConfig(context.Background())
+	if err != nil {
+		return nil
+	}
+	raw := string(cfg.DynamicClientRedirectUriAllowlist)
+	if raw == "" {
+		return nil
+	}
+	var patterns []string
+	if err := json.Unmarshal([]byte(raw), &patterns); err != nil {
+		return nil
+	}
+	return patterns
+}
+
 // GetDynamicClientRetention returns the retention window for dynamically
 // registered clients (e.g. CIMD). A value of 0 (or less) disables dynamic
 // client pruning. Returns 0 if the value is unset or malformed.
@@ -141,6 +159,19 @@ func (s *AppConfigService) UpdateAppConfig(ctx context.Context, input dto.AppCon
 		var patterns []string
 		if err := json.Unmarshal([]byte(input.CIMDURLAllowlist), &patterns); err != nil {
 			return nil, &common.InvalidCIMDURLPatternError{Pattern: input.CIMDURLAllowlist}
+		}
+		for _, p := range patterns {
+			if err := utils.ValidateCallbackURLPattern(p); err != nil {
+				return nil, &common.InvalidCIMDURLPatternError{Pattern: p}
+			}
+		}
+	}
+
+	// Validate the dynamic client redirect URI allowlist patterns, if provided
+	if input.DynamicClientRedirectUriAllowlist != "" {
+		var patterns []string
+		if err := json.Unmarshal([]byte(input.DynamicClientRedirectUriAllowlist), &patterns); err != nil {
+			return nil, &common.InvalidCIMDURLPatternError{Pattern: input.DynamicClientRedirectUriAllowlist}
 		}
 		for _, p := range patterns {
 			if err := utils.ValidateCallbackURLPattern(p); err != nil {

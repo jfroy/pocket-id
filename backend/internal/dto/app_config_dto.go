@@ -57,4 +57,5 @@ type AppConfigUpdateDto struct {
 	EmailVerificationEnabled                   string `json:"emailVerificationEnabled" binding:"required"`
 	CIMDURLAllowlist                           string `json:"cimdUrlAllowlist" binding:"omitempty,json"`
 	DynamicClientRetentionDays                 string `json:"dynamicClientRetentionDays" binding:"omitempty,number"`
+	DynamicClientRedirectUriAllowlist          string `json:"dynamicClientRedirectUriAllowlist" binding:"omitempty,json"`
 }
