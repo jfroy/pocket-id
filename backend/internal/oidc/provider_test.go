@@ -439,6 +439,28 @@ func generateEd25519TestKey(t *testing.T) any {
 	return key
 }
 
+// TestProviderAudienceStrategyAcceptsResourceURIs guards RFC 8707 resource-indicator support:
+// MCP and other resource-server clients request an audience that is the resource's own URI
+// (e.g. "https://mcp.example.com/v1"), which is never a whitelisted client ID. The configured
+// audience matching strategy must accept syntactically valid resource-indicator URIs in addition
+// to whatever the base strategy (exact client ID matching) allows.
+func TestProviderAudienceStrategyAcceptsResourceURIs(t *testing.T) {
+	db := testutils.NewDatabaseForTest(t)
+	signerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	provider, err := newProvider(NewStore(db, nil), nil, testTokenSigner{key: signerKey}, Config{ //nolint:gosec // static test-only provider secret
+		BaseURL:      "https://issuer.example.com",
+		TokenBaseURL: "https://issuer.example.com",
+		Secret:       []byte("test-secret"),
+	})
+	require.NoError(t, err)
+
+	strategy := provider.config.GetAudienceStrategy(t.Context())
+	err = strategy([]string{"client-1"}, []string{"https://mcp.example.com/v1"})
+	require.NoError(t, err)
+}
+
 func TestProviderIgnoresUnknownScopes(t *testing.T) {
 	db := testutils.NewDatabaseForTest(t)
 	signerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
