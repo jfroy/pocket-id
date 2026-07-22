@@ -43,7 +43,8 @@ type Dependencies struct {
 	Config     Config
 	HTTPClient *http.Client
 
-	GetCIMDURLAllowlist func() []string
+	GetCIMDURLAllowlist       func() []string
+	GetDynamicClientRetention func() time.Duration
 
 	Signer       TokenSigner
 	CustomClaims CustomClaimSource
@@ -75,6 +76,9 @@ func New(ctx context.Context, deps Dependencies) (*Module, error) {
 			WithCIMDEnabled(true).
 			WithGetCIMDURLAllowlist(deps.GetCIMDURLAllowlist).
 			WithHTTPClient(deps.HTTPClient)
+	}
+	if deps.GetDynamicClientRetention != nil {
+		store.WithDynamicClientRetention(deps.GetDynamicClientRetention)
 	}
 	authenticator, err := newFederatedClientAuthenticator(ctx, store, deps.HTTPClient, deps.Config.BaseURL)
 	if err != nil {

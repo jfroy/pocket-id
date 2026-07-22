@@ -155,12 +155,14 @@ func (j *DbCleanupJobs) clearAuditLogs(ctx context.Context) error {
 	return nil
 }
 
-// clearInactiveDynamicClients deletes dynamically registered clients that have
-// been inactive for longer than the configured retention window.
+// clearInactiveDynamicClients deletes dynamically registered clients (both
+// CIMD and DCR "dynamic" clients) that have been inactive for longer than
+// the configured retention window.
 //
 // For CIMD, the metadata_expires_at column is bumped every time a client's
-// metadata document is resolved, so a value far in the past means the client
-// has been inactive since then.
+// metadata document is resolved. For "dynamic" clients, it is set at
+// registration/update time. Either way, a value far in the past means the
+// client has been inactive since then.
 //
 // A retention of 0 (or less) disables the cleanup.
 func (j *DbCleanupJobs) clearInactiveDynamicClients(ctx context.Context) error {
@@ -173,7 +175,7 @@ func (j *DbCleanupJobs) clearInactiveDynamicClients(ctx context.Context) error {
 
 	st := j.db.
 		WithContext(ctx).
-		Where("client_type = ?", model.OidcClientTypeCIMD).
+		Where("client_type IN ?", []model.OidcClientType{model.OidcClientTypeCIMD, model.OidcClientTypeDynamic}).
 		Where("metadata_expires_at IS NOT NULL AND metadata_expires_at < ?", datatype.DateTime(cutoff)).
 		Delete(&model.OidcClient{})
 	if st.Error != nil {

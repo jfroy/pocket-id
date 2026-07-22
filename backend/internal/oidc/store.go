@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"sync"
@@ -61,6 +62,8 @@ type Store struct {
 	getCIMDURLAllowlist func() []string
 	metadataFetcher     fosite.CIMDFetcher
 	metadataFetcherOnce sync.Once
+
+	getDynamicClientRetention func() time.Duration
 }
 
 // WithIssuer sets the issuer that is added as an extra audience to access tokens carrying an identity scope, so they can be presented to Pocket ID's own endpoints such as /userinfo
@@ -85,6 +88,15 @@ func (s *Store) WithCIMDEnabled(cimdEnabled bool) *Store {
 // WithGetCIMDURLAllowlist sets the provider for the CIMD URL allowlist.
 func (s *Store) WithGetCIMDURLAllowlist(fn func() []string) *Store {
 	s.getCIMDURLAllowlist = fn
+	return s
+}
+
+// WithDynamicClientRetention sets the provider for the dynamic-client (DCR)
+// retention window. When set, successful token issuance for a "dynamic"
+// client bumps its metadata_expires_at, keeping actively used clients out of
+// reach of the inactive-dynamic-client cleanup job.
+func (s *Store) WithDynamicClientRetention(fn func() time.Duration) *Store {
+	s.getDynamicClientRetention = fn
 	return s
 }
 
@@ -248,9 +260,42 @@ func (s *Store) InvalidateAuthorizeCodeSession(ctx context.Context, code string)
 }
 
 func (s *Store) CreateAccessTokenSession(ctx context.Context, signature string, request fosite.Requester) error {
+	// Best-effort: a dynamically-registered client that keeps obtaining tokens is
+	// still active, so push its retention deadline out. This must never fail
+	// token issuance itself.
+	s.bumpDynamicClientFreshness(ctx, request)
+
 	// userinfo and introspection read the granted audience from the persisted access token session, so an access token granted an identity scope is stored with the issuer added to its audience, letting it be presented to Pocket ID's own identity endpoints
 	// A token audienced only to a custom API carries no identity scope here and so never gains the issuer audience
 	return s.upsertSession(ctx, sessionKindAccessToken, signature, withIdentityAudience(request, s.issuer), "", true, fosite.AccessToken)
+}
+
+// bumpDynamicClientFreshness extends a "dynamic" (RFC 7591/7592) client's
+// metadata_expires_at to now+retention on successful token issuance, mirroring
+// how CIMD clients are kept fresh by metadata-document resolution. It is a
+// no-op when no retention provider is configured, the client is not a
+// "dynamic" client, or the retention window is disabled (<= 0).
+func (s *Store) bumpDynamicClientFreshness(ctx context.Context, request fosite.Requester) {
+	if s.getDynamicClientRetention == nil {
+		return
+	}
+	client, ok := request.GetClient().(Client)
+	if !ok || !client.IsDynamic() {
+		return
+	}
+	retention := s.getDynamicClientRetention()
+	if retention <= 0 {
+		return
+	}
+
+	expiresAt := datatype.DateTime(time.Now().Add(retention))
+	err := s.dbFor(ctx).
+		Model(&model.OidcClient{}).
+		Where("id = ?", client.GetID()).
+		Update("metadata_expires_at", expiresAt).Error
+	if err != nil {
+		slog.WarnContext(ctx, "Failed to bump dynamic client freshness", "error", err, "client_id", client.GetID())
+	}
 }
 
 func (s *Store) GetAccessTokenSession(ctx context.Context, signature string, _ fosite.Session) (fosite.Requester, error) {

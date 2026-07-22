@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pocket-id/pocket-id/backend/internal/model"
+	datatype "github.com/pocket-id/pocket-id/backend/internal/model/types"
 	testutils "github.com/pocket-id/pocket-id/backend/internal/utils/testing"
 )
 
@@ -193,6 +194,99 @@ func TestStoreRevokeSessionsByIDTokenHintSkipsSessionsWithoutMatchingJTI(t *test
 	assert.True(t, activeRefreshByKey["other-client-refresh"])
 	assert.True(t, accessKeys["same-client-access"])
 	assert.True(t, accessKeys["other-client-access"])
+}
+
+// TestStoreCreateAccessTokenSessionBumpsDynamicClientFreshness verifies that
+// successfully issuing an access token to a "dynamic" (RFC 7591/7592) client
+// pushes its metadata_expires_at out to now+retention, keeping actively used
+// clients out of reach of the inactive-dynamic-client cleanup job (see
+// internal/job/db_cleanup_job.go). Standard clients, and dynamic clients when
+// no retention is configured, must be left untouched.
+func TestStoreCreateAccessTokenSessionBumpsDynamicClientFreshness(t *testing.T) {
+	requesterFor := func(clientID string, clientType model.OidcClientType) fosite.Requester {
+		session := NewEmptySession()
+		session.Subject = "test-user"
+		return &fosite.Request{
+			ID:           "request-" + clientID,
+			RequestedAt:  time.Now().UTC(),
+			Client:       Client{OidcClient: model.OidcClient{Base: model.Base{ID: clientID}, ClientType: clientType}},
+			GrantedScope: fosite.Arguments{"openid"},
+			Form:         map[string][]string{},
+			Session:      session,
+		}
+	}
+
+	t.Run("bumps a dynamic client's freshness", func(t *testing.T) {
+		db := testutils.NewDatabaseForTest(t)
+		staleExpiry := datatype.DateTime(time.Now().AddDate(0, -1, 0))
+		require.NoError(t, db.Create(&model.OidcClient{
+			Base:              model.Base{ID: "dyn-client"},
+			Name:              "Dynamic Client",
+			ClientType:        model.OidcClientTypeDynamic,
+			MetadataExpiresAt: &staleExpiry,
+		}).Error)
+
+		retention := 30 * 24 * time.Hour
+		store := NewStore(db, nil).WithDynamicClientRetention(func() time.Duration { return retention })
+
+		require.NoError(t, store.CreateAccessTokenSession(t.Context(), "dyn-access", requesterFor("dyn-client", model.OidcClientTypeDynamic)))
+
+		var updated model.OidcClient
+		require.NoError(t, db.First(&updated, "id = ?", "dyn-client").Error)
+		require.NotNil(t, updated.MetadataExpiresAt)
+		require.WithinDuration(t, time.Now().Add(retention), time.Time(*updated.MetadataExpiresAt), 10*time.Second)
+	})
+
+	t.Run("leaves a standard client untouched", func(t *testing.T) {
+		db := testutils.NewDatabaseForTest(t)
+		require.NoError(t, db.Create(&model.OidcClient{
+			Base:       model.Base{ID: "std-client"},
+			Name:       "Standard Client",
+			ClientType: model.OidcClientTypeStandard,
+		}).Error)
+
+		store := NewStore(db, nil).WithDynamicClientRetention(func() time.Duration { return 30 * 24 * time.Hour })
+
+		require.NoError(t, store.CreateAccessTokenSession(t.Context(), "std-access", requesterFor("std-client", model.OidcClientTypeStandard)))
+
+		var updated model.OidcClient
+		require.NoError(t, db.First(&updated, "id = ?", "std-client").Error)
+		require.Nil(t, updated.MetadataExpiresAt)
+	})
+
+	t.Run("leaves a dynamic client untouched when retention is disabled", func(t *testing.T) {
+		db := testutils.NewDatabaseForTest(t)
+		require.NoError(t, db.Create(&model.OidcClient{
+			Base:       model.Base{ID: "dyn-no-retention"},
+			Name:       "Dynamic Client",
+			ClientType: model.OidcClientTypeDynamic,
+		}).Error)
+
+		store := NewStore(db, nil).WithDynamicClientRetention(func() time.Duration { return 0 })
+
+		require.NoError(t, store.CreateAccessTokenSession(t.Context(), "dyn-no-retention-access", requesterFor("dyn-no-retention", model.OidcClientTypeDynamic)))
+
+		var updated model.OidcClient
+		require.NoError(t, db.First(&updated, "id = ?", "dyn-no-retention").Error)
+		require.Nil(t, updated.MetadataExpiresAt)
+	})
+
+	t.Run("leaves a dynamic client untouched when no retention provider is configured", func(t *testing.T) {
+		db := testutils.NewDatabaseForTest(t)
+		require.NoError(t, db.Create(&model.OidcClient{
+			Base:       model.Base{ID: "dyn-no-provider"},
+			Name:       "Dynamic Client",
+			ClientType: model.OidcClientTypeDynamic,
+		}).Error)
+
+		store := NewStore(db, nil)
+
+		require.NoError(t, store.CreateAccessTokenSession(t.Context(), "dyn-no-provider-access", requesterFor("dyn-no-provider", model.OidcClientTypeDynamic)))
+
+		var updated model.OidcClient
+		require.NoError(t, db.First(&updated, "id = ?", "dyn-no-provider").Error)
+		require.Nil(t, updated.MetadataExpiresAt)
+	})
 }
 
 func newTestRequester(requestID, clientID, subject, idTokenJTI string) fosite.Requester {

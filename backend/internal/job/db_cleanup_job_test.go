@@ -17,6 +17,8 @@ func TestClearInactiveDynamicClients(t *testing.T) {
 	staleID := "https://stale.example/cimd"
 	freshID := "https://fresh.example/cimd"
 	standardID := "standard-client"
+	dynStaleID := "dyn-stale"
+	dynFreshID := "dyn-fresh"
 
 	// seed inserts one dynamic client whose metadata expired 7 months ago, one that
 	// expired last month, and one standard client, then returns a fresh job handle.
@@ -38,6 +40,8 @@ func TestClearInactiveDynamicClients(t *testing.T) {
 			{Base: model.Base{ID: staleID}, Name: "stale", ClientType: model.OidcClientTypeCIMD, MetadataExpiresAt: &staleExpiry},
 			{Base: model.Base{ID: freshID}, Name: "fresh", ClientType: model.OidcClientTypeCIMD, MetadataExpiresAt: &freshExpiry},
 			{Base: model.Base{ID: standardID}, Name: "standard", ClientType: model.OidcClientTypeStandard},
+			{Base: model.Base{ID: dynStaleID}, Name: "dyn-stale", ClientType: model.OidcClientTypeDynamic, MetadataExpiresAt: &staleExpiry},
+			{Base: model.Base{ID: dynFreshID}, Name: "dyn-fresh", ClientType: model.OidcClientTypeDynamic, MetadataExpiresAt: &freshExpiry},
 		}
 		require.NoError(t, db.Create(&clients).Error)
 
@@ -67,6 +71,8 @@ func TestClearInactiveDynamicClients(t *testing.T) {
 		require.False(t, ids[staleID], "stale dynamic client should be deleted")
 		require.True(t, ids[freshID], "fresh dynamic client should be kept")
 		require.True(t, ids[standardID], "standard client should never be deleted")
+		require.False(t, ids[dynStaleID], "stale dynamic client should be deleted")
+		require.True(t, ids[dynFreshID], "fresh dynamic client should be kept")
 	})
 
 	t.Run("retention of 0 disables the cleanup", func(t *testing.T) {
@@ -77,6 +83,8 @@ func TestClearInactiveDynamicClients(t *testing.T) {
 		require.True(t, ids[staleID])
 		require.True(t, ids[freshID])
 		require.True(t, ids[standardID])
+		require.True(t, ids[dynStaleID])
+		require.True(t, ids[dynFreshID])
 	})
 
 	t.Run("malformed retention disables the cleanup", func(t *testing.T) {
