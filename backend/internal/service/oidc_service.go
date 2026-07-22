@@ -16,6 +16,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/pocket-id/pocket-id/backend/internal/appconfig"
 	"github.com/pocket-id/pocket-id/backend/internal/common"
 	"github.com/pocket-id/pocket-id/backend/internal/dto"
 	"github.com/pocket-id/pocket-id/backend/internal/model"
@@ -39,6 +40,7 @@ const (
 type OidcService struct {
 	db                *gorm.DB
 	jwtService        *JwtService
+	appConfigService  *appconfig.AppConfigService
 	previewBuilder    oidcClientPreviewBuilder
 	metadataRefresher metadataRefresher
 	scimService       *ScimService
@@ -58,6 +60,7 @@ type metadataRefresher interface {
 func NewOidcService(
 	db *gorm.DB,
 	jwtService *JwtService,
+	appConfigService *appconfig.AppConfigService,
 	previewBuilder oidcClientPreviewBuilder,
 	metadataRefresher metadataRefresher,
 	scimService *ScimService,
@@ -67,6 +70,7 @@ func NewOidcService(
 	s = &OidcService{
 		db:                db,
 		jwtService:        jwtService,
+		appConfigService:  appConfigService,
 		previewBuilder:    previewBuilder,
 		metadataRefresher: metadataRefresher,
 		scimService:       scimService,
