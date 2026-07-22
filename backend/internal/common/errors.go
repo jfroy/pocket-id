@@ -78,6 +78,17 @@ func (e InvalidCIMDURLPatternError) Error() string {
 }
 func (e InvalidCIMDURLPatternError) HttpStatusCode() int { return http.StatusBadRequest }
 
+type InvalidDynamicClientRedirectURIPatternError struct {
+	Pattern string
+}
+
+func (e InvalidDynamicClientRedirectURIPatternError) Error() string {
+	return "invalid dynamic client redirect URI pattern: " + e.Pattern
+}
+func (e InvalidDynamicClientRedirectURIPatternError) HttpStatusCode() int {
+	return http.StatusBadRequest
+}
+
 type FileTypeNotSupportedError struct{}
 
 func (e FileTypeNotSupportedError) Error() string       { return "file type not supported" }

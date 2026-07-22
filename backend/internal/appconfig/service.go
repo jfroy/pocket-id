@@ -171,11 +171,11 @@ func (s *AppConfigService) UpdateAppConfig(ctx context.Context, input dto.AppCon
 	if input.DynamicClientRedirectUriAllowlist != "" {
 		var patterns []string
 		if err := json.Unmarshal([]byte(input.DynamicClientRedirectUriAllowlist), &patterns); err != nil {
-			return nil, &common.InvalidCIMDURLPatternError{Pattern: input.DynamicClientRedirectUriAllowlist}
+			return nil, &common.InvalidDynamicClientRedirectURIPatternError{Pattern: input.DynamicClientRedirectUriAllowlist}
 		}
 		for _, p := range patterns {
 			if err := utils.ValidateCallbackURLPattern(p); err != nil {
-				return nil, &common.InvalidCIMDURLPatternError{Pattern: p}
+				return nil, &common.InvalidDynamicClientRedirectURIPatternError{Pattern: p}
 			}
 		}
 	}

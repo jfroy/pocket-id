@@ -425,4 +425,13 @@ func TestService_DynamicClientRedirectUriAllowlist(t *testing.T) {
 		})
 		require.Error(t, err)
 	})
+
+	t.Run("returns empty on malformed value", func(t *testing.T) {
+		setUIConfigDisabled(t, false)
+		db := testutils.NewDatabaseForTest(t)
+		svc := newActorBackedService(t, db)
+
+		require.NoError(t, svc.UpdateAppConfigValues(t.Context(), "dynamicClientRedirectUriAllowlist", "not-json"))
+		assert.Empty(t, svc.GetDynamicClientRedirectUriAllowlist())
+	})
 }
