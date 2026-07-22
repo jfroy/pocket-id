@@ -184,19 +184,48 @@ Dynamic clients mirror CIMD clients:
   `client_secret` (if any), `client_id_issued_at`,
   `client_secret_expires_at: 0`, `registration_access_token`,
   `registration_client_uri`, per OIDC DCR §3.2.
+- **Registered metadata echo:** Pocket ID does not persist arbitrary DCR
+  metadata (`grant_types`, `response_types`, `scope`) as distinct columns — a
+  dynamic client's capabilities derive from the shared model flags. The
+  register/GET/PUT responses therefore **synthesize** the metadata consistently
+  from stored state: `token_endpoint_auth_method` from `IsPublic`
+  (`none` vs `client_secret_basic`), `grant_types`
+  (`["authorization_code","refresh_token"]`) and `response_types` (`["code"]`)
+  as the supported set for dynamic clients, plus `redirect_uris` and
+  `client_name`.
+- **`logo_uri`:** if supplied at registration/update, the logo is fetched and
+  stored through the same SSRF-guarded path standard clients use
+  (`downloadAndSaveLogoFromURL`, which rejects private/loopback/link-local IPs
+  on the initial request and on every redirect). The stored logo is served from
+  the client's own logo endpoint; the original `logo_uri` is not echoed back.
 
 ### 6.3 Client configuration endpoint — RFC 7592
 
 `GET/PUT/DELETE /api/oidc/register/:id`:
 
 - **Auth:** `Authorization: Bearer <registration access token>`, compared to the
-  stored hash. Only valid for `dynamic` clients; `standard`/`cimd` clients
-  return 403.
+  stored hash. Only valid for `dynamic` clients. Any auth failure — unknown
+  client, non-`dynamic` client, or token mismatch — returns `401
+  invalid_token` (the same response for a missing client and a bad token, so
+  the endpoint does not leak client existence).
 - **GET:** return current client metadata (no secret; secret only at
   registration and rotation).
 - **PUT:** replace client metadata; re-validate redirect URIs against the
-  allowlist. Preserves `client_id`.
+  allowlist (a rejected URI returns `400 invalid_redirect_uri`, distinct from
+  the `401` auth failures). Preserves `client_id`. If the update transitions the
+  client from public to confidential, a fresh `client_secret` is issued and
+  returned once; a transition to public clears the stored secret.
 - **DELETE:** delete the dynamic client.
+
+**`DCR_ENABLED` scope (intended semantics).** The env flag gates **new
+registrations only**: `POST /api/oidc/register` returns `403` when disabled. The
+RFC 7592 client-configuration endpoints (`GET`/`PUT`/`DELETE`) are **not** gated
+by the flag — a client that already holds a valid registration access token can
+continue to read, update, and delete its own registration after an admin sets
+`DCR_ENABLED=false`, and existing dynamic clients continue to function as OAuth
+clients. Disabling DCR stops new self-service registrations; it is not a
+kill-switch for already-registered dynamic clients. (Admins can still remove a
+specific dynamic client through the normal admin client management.)
 
 ### 6.4 Data model & migrations
 
