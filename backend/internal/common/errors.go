@@ -57,6 +57,11 @@ type TokenInvalidError struct{}
 func (e TokenInvalidError) Error() string       { return "Token is invalid" }
 func (e TokenInvalidError) HttpStatusCode() int { return http.StatusUnauthorized }
 
+type InvalidRegistrationTokenError struct{}
+
+func (e InvalidRegistrationTokenError) Error() string       { return "invalid registration access token" }
+func (e InvalidRegistrationTokenError) HttpStatusCode() int { return http.StatusUnauthorized }
+
 type OidcMissingAuthorizationError struct{}
 
 func (e OidcMissingAuthorizationError) Error() string       { return "missing authorization" }

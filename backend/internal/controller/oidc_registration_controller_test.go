@@ -81,3 +81,100 @@ func TestRegistrationEndpoint(t *testing.T) {
 		require.Equal(t, http.StatusBadRequest, resp.Code)
 	})
 }
+
+// TestRegistrationClientConfigurationEndpoint exercises the RFC 7592 client
+// configuration endpoints (GET/PUT/DELETE /api/oidc/register/:id) at the HTTP
+// layer, including the status-code regressions from the final review: a PUT
+// with an out-of-allowlist redirect URI must return 400 (not 401), and a PUT
+// that moves a public client to a confidential auth method must return a
+// non-empty client_secret.
+func TestRegistrationClientConfigurationEndpoint(t *testing.T) {
+	original := common.EnvConfig
+	t.Cleanup(func() { common.EnvConfig = original })
+	common.EnvConfig.UiConfigDisabled = true
+	common.EnvConfig.DCREnabled = true
+
+	router := newTestRegistrationRouter(t)
+
+	do := func(t *testing.T, method, path, token, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		var reader *strings.Reader
+		if body != "" {
+			reader = strings.NewReader(body)
+		} else {
+			reader = strings.NewReader("")
+		}
+		req := httptest.NewRequestWithContext(t.Context(), method, path, reader)
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		return w
+	}
+
+	register := func(t *testing.T, body string) dto.OidcClientRegistrationResponseDto {
+		t.Helper()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/oidc/register", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+		require.Equal(t, http.StatusCreated, w.Code)
+		var doc dto.OidcClientRegistrationResponseDto
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &doc))
+		return doc
+	}
+
+	// Register a confidential client for GET/PUT/DELETE happy-path assertions.
+	confidential := register(t, `{"redirect_uris":["https://app.example.com/cb"],"client_name":"C","token_endpoint_auth_method":"client_secret_basic"}`)
+	path := "/api/oidc/register/" + confidential.ClientID
+
+	t.Run("GET with a valid bearer token returns the client", func(t *testing.T) {
+		resp := do(t, http.MethodGet, path, confidential.RegistrationAccessToken, "")
+		require.Equal(t, http.StatusOK, resp.Code)
+		var doc dto.OidcClientRegistrationResponseDto
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &doc))
+		assert.Equal(t, confidential.ClientID, doc.ClientID)
+	})
+
+	t.Run("GET with a wrong bearer token returns 401", func(t *testing.T) {
+		resp := do(t, http.MethodGet, path, "wrong-token", "")
+		require.Equal(t, http.StatusUnauthorized, resp.Code)
+	})
+
+	t.Run("GET with no bearer token returns 401", func(t *testing.T) {
+		resp := do(t, http.MethodGet, path, "", "")
+		require.Equal(t, http.StatusUnauthorized, resp.Code)
+	})
+
+	t.Run("PUT with a redirect URI outside the allowlist returns 400", func(t *testing.T) {
+		resp := do(t, http.MethodPut, path, confidential.RegistrationAccessToken,
+			`{"redirect_uris":["https://evil.example.com/cb"],"client_name":"C","token_endpoint_auth_method":"client_secret_basic"}`)
+		require.Equal(t, http.StatusBadRequest, resp.Code)
+		var body map[string]any
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &body))
+		assert.Equal(t, "invalid_redirect_uri", body["error"])
+	})
+
+	t.Run("PUT switching a public client to client_secret_basic returns a new client_secret", func(t *testing.T) {
+		public := register(t, `{"redirect_uris":["https://app.example.com/cb"],"client_name":"Public","token_endpoint_auth_method":"none"}`)
+		require.Empty(t, public.ClientSecret)
+
+		publicPath := "/api/oidc/register/" + public.ClientID
+		resp := do(t, http.MethodPut, publicPath, public.RegistrationAccessToken,
+			`{"redirect_uris":["https://app.example.com/cb"],"client_name":"Public","token_endpoint_auth_method":"client_secret_basic"}`)
+		require.Equal(t, http.StatusOK, resp.Code)
+		var doc dto.OidcClientRegistrationResponseDto
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &doc))
+		assert.NotEmpty(t, doc.ClientSecret)
+	})
+
+	t.Run("DELETE with a valid token removes the client, subsequent GET returns 401", func(t *testing.T) {
+		resp := do(t, http.MethodDelete, path, confidential.RegistrationAccessToken, "")
+		require.Equal(t, http.StatusNoContent, resp.Code)
+
+		getResp := do(t, http.MethodGet, path, confidential.RegistrationAccessToken, "")
+		require.Equal(t, http.StatusUnauthorized, getResp.Code)
+	})
+}

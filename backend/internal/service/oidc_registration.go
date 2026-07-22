@@ -43,16 +43,12 @@ func (s *OidcService) RegisterDynamicClient(ctx context.Context, input dto.OidcC
 
 	var clientSecret string
 	if !isPublic {
-		secret, err := utils.GenerateRandomAlphanumericString(32)
-		if err != nil {
-			return model.OidcClient{}, "", "", err
-		}
-		hashed, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+		secret, hash, err := generateClientSecret()
 		if err != nil {
 			return model.OidcClient{}, "", "", err
 		}
 		clientSecret = secret
-		client.Secret = string(hashed)
+		client.Secret = hash
 	}
 
 	regToken, regHash, err := generateRegistrationAccessToken()
@@ -75,13 +71,15 @@ func (s *OidcService) RegisterDynamicClient(ctx context.Context, input dto.OidcC
 func (s *OidcService) authenticateDynamicClient(ctx context.Context, clientID, token string) (model.OidcClient, error) {
 	var client model.OidcClient
 	if err := s.db.WithContext(ctx).First(&client, "id = ?", clientID).Error; err != nil {
-		return model.OidcClient{}, err
+		// Intentionally return the same auth-failure error as the other failure
+		// paths below, rather than leaking whether the client exists.
+		return model.OidcClient{}, &common.InvalidRegistrationTokenError{}
 	}
 	if !client.IsDynamic() || client.RegistrationAccessTokenHash == nil {
-		return model.OidcClient{}, &common.ValidationError{Message: "client is not a dynamically registered client"}
+		return model.OidcClient{}, &common.InvalidRegistrationTokenError{}
 	}
 	if bcrypt.CompareHashAndPassword([]byte(*client.RegistrationAccessTokenHash), []byte(token)) != nil {
-		return model.OidcClient{}, &common.ValidationError{Message: "invalid registration access token"}
+		return model.OidcClient{}, &common.InvalidRegistrationTokenError{}
 	}
 	return client, nil
 }
@@ -95,28 +93,49 @@ func (s *OidcService) GetDynamicClient(ctx context.Context, clientID, token stri
 
 // UpdateDynamicClient implements RFC 7592 client configuration update: it
 // authenticates the caller, re-validates the requested redirect URIs against
-// the configured allowlist, and persists the updated client metadata.
-func (s *OidcService) UpdateDynamicClient(ctx context.Context, clientID, token string, input dto.OidcClientRegistrationRequestDto) (model.OidcClient, error) {
+// the configured allowlist, and persists the updated client metadata. It
+// returns the plaintext client secret when a new one was (re)issued as part
+// of a public-to-confidential transition, or "" otherwise.
+func (s *OidcService) UpdateDynamicClient(ctx context.Context, clientID, token string, input dto.OidcClientRegistrationRequestDto) (model.OidcClient, string, error) {
 	client, err := s.authenticateDynamicClient(ctx, clientID, token)
 	if err != nil {
-		return model.OidcClient{}, err
+		return model.OidcClient{}, "", err
 	}
 	allowlist := s.appConfigService.GetDynamicClientRedirectUriAllowlist()
 	if err := oidc.ValidateRegistrationRedirectURIs(input.RedirectURIs, allowlist); err != nil {
-		return model.OidcClient{}, err
+		return model.OidcClient{}, "", err
 	}
 	client.Name = input.ClientName
 	client.CallbackURLs = model.UrlList(input.RedirectURIs)
-	client.IsPublic = input.TokenEndpointAuthMethod == "none"
-	client.PkceEnabled = client.IsPublic
+
+	isPublic := input.TokenEndpointAuthMethod == "none"
+	client.IsPublic = isPublic
+	client.PkceEnabled = isPublic
+
+	var clientSecret string
+	switch {
+	case !isPublic && client.Secret == "":
+		// Public-to-confidential transition: this client never had a secret, so
+		// one must be (re)issued now or it could never authenticate.
+		secret, hash, err := generateClientSecret()
+		if err != nil {
+			return model.OidcClient{}, "", err
+		}
+		clientSecret = secret
+		client.Secret = hash
+	case isPublic:
+		// Confidential-to-public transition: clear any stale secret hash.
+		client.Secret = ""
+	}
+
 	if retention := s.appConfigService.GetDynamicClientRetention(); retention > 0 {
 		expires := datatype.DateTime(time.Now().Add(retention))
 		client.MetadataExpiresAt = &expires
 	}
 	if err := s.db.WithContext(ctx).Save(&client).Error; err != nil {
-		return model.OidcClient{}, err
+		return model.OidcClient{}, "", err
 	}
-	return client, nil
+	return client, clientSecret, nil
 }
 
 // DeleteDynamicClient implements RFC 7592 client configuration deletion: it
@@ -127,6 +146,21 @@ func (s *OidcService) DeleteDynamicClient(ctx context.Context, clientID, token s
 		return err
 	}
 	return s.db.WithContext(ctx).Delete(&client).Error
+}
+
+// generateClientSecret creates a new random client secret and its bcrypt hash
+// for storage. It returns the plaintext secret (to be shown to the caller once)
+// and the hash (to be persisted).
+func generateClientSecret() (plaintext, hash string, err error) {
+	secret, err := utils.GenerateRandomAlphanumericString(32)
+	if err != nil {
+		return "", "", err
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", err
+	}
+	return secret, string(hashed), nil
 }
 
 // generateRegistrationAccessToken creates a new random registration access token

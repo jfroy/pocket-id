@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -44,7 +45,12 @@ func (rc *OidcRegistrationController) registerHandler(c *gin.Context) {
 	}
 	client, secret, regToken, err := rc.oidcService.RegisterDynamicClient(c.Request.Context(), input)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_redirect_uri", "error_description": err.Error()})
+		var validationErr *common.ValidationError
+		if errors.As(err, &validationErr) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_redirect_uri", "error_description": err.Error()})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		}
 		return
 	}
 	c.JSON(http.StatusCreated, dto.OidcClientRegistrationResponseDto{
@@ -72,7 +78,12 @@ func bearerToken(c *gin.Context) string {
 func (rc *OidcRegistrationController) getHandler(c *gin.Context) {
 	client, err := rc.oidcService.GetDynamicClient(c.Request.Context(), c.Param("id"), bearerToken(c))
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
+		var invalidTokenErr *common.InvalidRegistrationTokenError
+		if errors.As(err, &invalidTokenErr) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, dto.OidcClientRegistrationResponseDto{
@@ -89,13 +100,23 @@ func (rc *OidcRegistrationController) updateHandler(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_client_metadata", "error_description": err.Error()})
 		return
 	}
-	client, err := rc.oidcService.UpdateDynamicClient(c.Request.Context(), c.Param("id"), bearerToken(c), input)
+	client, secret, err := rc.oidcService.UpdateDynamicClient(c.Request.Context(), c.Param("id"), bearerToken(c), input)
 	if err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token", "error_description": err.Error()})
+		var invalidTokenErr *common.InvalidRegistrationTokenError
+		var validationErr *common.ValidationError
+		switch {
+		case errors.As(err, &invalidTokenErr):
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
+		case errors.As(err, &validationErr):
+			c.JSON(http.StatusBadRequest, gin.H{"error": "invalid_redirect_uri", "error_description": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		}
 		return
 	}
 	c.JSON(http.StatusOK, dto.OidcClientRegistrationResponseDto{
 		ClientID:              client.ID,
+		ClientSecret:          secret,
 		ClientName:            client.Name,
 		RedirectURIs:          []string(client.CallbackURLs),
 		RegistrationClientURI: rc.registrationClientURI(client.ID),
@@ -104,7 +125,12 @@ func (rc *OidcRegistrationController) updateHandler(c *gin.Context) {
 
 func (rc *OidcRegistrationController) deleteHandler(c *gin.Context) {
 	if err := rc.oidcService.DeleteDynamicClient(c.Request.Context(), c.Param("id"), bearerToken(c)); err != nil {
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
+		var invalidTokenErr *common.InvalidRegistrationTokenError
+		if errors.As(err, &invalidTokenErr) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid_token"})
+		} else {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server_error"})
+		}
 		return
 	}
 	c.Status(http.StatusNoContent)

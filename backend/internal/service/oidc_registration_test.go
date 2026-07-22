@@ -118,19 +118,42 @@ func TestDynamicClientConfiguration(t *testing.T) {
 	})
 
 	t.Run("PUT updates and re-validates redirect URIs", func(t *testing.T) {
-		updated, err := svc.UpdateDynamicClient(t.Context(), clientID, regToken, dto.OidcClientRegistrationRequestDto{
-			RedirectURIs: []string{"https://app.example.com/new"},
-			ClientName:   "Renamed",
+		updated, secret, err := svc.UpdateDynamicClient(t.Context(), clientID, regToken, dto.OidcClientRegistrationRequestDto{
+			RedirectURIs:            []string{"https://app.example.com/new"},
+			ClientName:              "Renamed",
+			TokenEndpointAuthMethod: "client_secret_basic",
 		})
 		require.NoError(t, err)
 		assert.Equal(t, "Renamed", updated.Name)
+		// Already confidential with an existing secret, so no new secret is issued.
+		assert.Empty(t, secret)
 	})
 
 	t.Run("PUT rejects a redirect URI outside the allowlist", func(t *testing.T) {
-		_, err := svc.UpdateDynamicClient(t.Context(), clientID, regToken, dto.OidcClientRegistrationRequestDto{
+		_, _, err := svc.UpdateDynamicClient(t.Context(), clientID, regToken, dto.OidcClientRegistrationRequestDto{
 			RedirectURIs: []string{"https://evil.example.com/cb"},
 		})
 		require.Error(t, err)
+	})
+
+	t.Run("PUT issues a new secret on a public-to-confidential transition", func(t *testing.T) {
+		publicClient, _, publicRegToken, err := svc.RegisterDynamicClient(t.Context(), dto.OidcClientRegistrationRequestDto{
+			RedirectURIs:            []string{"https://app.example.com/cb"},
+			ClientName:              "Public Client",
+			TokenEndpointAuthMethod: "none",
+		})
+		require.NoError(t, err)
+		require.Empty(t, publicClient.Secret)
+
+		updated, secret, err := svc.UpdateDynamicClient(t.Context(), publicClient.ID, publicRegToken, dto.OidcClientRegistrationRequestDto{
+			RedirectURIs:            []string{"https://app.example.com/cb"},
+			ClientName:              "Public Client",
+			TokenEndpointAuthMethod: "client_secret_basic",
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, secret)
+		assert.NotEmpty(t, updated.Secret)
+		assert.False(t, updated.IsPublic)
 	})
 
 	t.Run("DELETE removes the client", func(t *testing.T) {

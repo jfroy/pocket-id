@@ -114,7 +114,9 @@ func (wkc *WellKnownController) computeBaseMetadata() (map[string]any, error) {
 		"token_endpoint_auth_methods_supported":          []string{"client_secret_basic", "client_secret_post", "none"},
 		"pushed_authorization_request_endpoint":          internalAppUrl + "/api/oidc/par",
 		"require_pushed_authorization_requests":          false,
-		"resource_indicators_supported":                  true,
+		// Custom advertisement: not defined by RFC 8414 or RFC 8707, but included so
+		// clients can detect that the `resource` parameter is supported.
+		"resource_indicators_supported": true,
 	}, nil
 }
 
