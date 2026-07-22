@@ -77,21 +77,36 @@ allowlist and no per-client resource registry — the resource server validates
 `aud` itself. A single `resource` value is supported (fosite already rejects
 multiples).
 
-**Mechanism:**
+**Mechanism** (settled after tracing fosite's audience internals):
 
-- Extend the authorize and token request handling so that, after
-  `ValidateResourceIndicator` succeeds, the resource value is recorded as a
-  **granted audience** on the request/session. This is distinct from the legacy
-  `audience` param path and deliberately bypasses
-  `ExactAudienceMatchingStrategy` (permissive echo).
-- Persist the authorize-time resource on the stored authorize request/session.
-  At the token endpoint, if the client re-sends `resource`, enforce that
-  token-time resources are a subset of authorize-time resources (RFC 8707 §2.2);
-  otherwise inherit the authorize-time resource. Propagate across refresh-token
-  exchange so refreshed tokens keep the same `aud`.
-- The resulting access-token `aud` therefore contains the resource. Composition
-  with `withIdentityAudience` must be preserved (identity-scope tokens still add
-  the issuer).
+- The access token's `aud` is serialized from `GetGrantedAudience()`
+  (`handler/oauth2/strategy_jwt.go`). Granted audience persists from the
+  authorize request into the code session (via `Sanitize`) and is copied to the
+  token at the token endpoint (`flow_authorize_code_token.go`); refresh re-grants
+  it from the original request (`flow_refresh.go`).
+- **Direct grant:** after `ValidateResourceIndicator` succeeds, grant the
+  resource value directly as an audience on the request. Do this at both points
+  where fosite already validates the resource: the authorize request handler
+  (covers authorization-code and implicit) and the access request handler
+  (covers client-credentials, device, refresh re-issue). Because granted
+  audience persists and is copied forward, the resource reaches the token `aud`
+  across all flows without per-flow changes.
+- **Permissive matching strategy:** refresh (and any re-validation) checks the
+  granted audience against `client.GetAudience()` through the configured
+  `AudienceMatchingStrategy`. `ExactAudienceMatchingStrategy` would reject a
+  resource URI the client never declared. Add a fosite
+  `ResourceIndicatorAudienceMatchingStrategy` that wraps a base strategy and
+  additionally accepts any value that is a valid absolute resource-indicator URI
+  (`IsValidResourceIndicatorURI`). pocket-id wires this into the provider in
+  place of the bare exact strategy. This *is* the permissive-echo policy: any
+  syntactically valid resource URI is an acceptable audience; the resource
+  server enforces `aud`.
+- No separate authorize-time/token-time subset enforcement is needed: permissive
+  echo means a client could request any resource anyway, so token-time values
+  are simply granted the same way. The legacy `audience` parameter path is
+  unchanged — the wrapped base strategy still governs it exactly.
+- Composition with `withIdentityAudience` is preserved (identity-scope tokens
+  still add the issuer to `aud`).
 
 **Scope of change:** fosite handlers for authorization-code (authorize + token),
 refresh, device, and client-credentials flows, plus wherever the granted
