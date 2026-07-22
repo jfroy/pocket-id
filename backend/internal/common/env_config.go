@@ -58,6 +58,7 @@ type EnvConfigSchema struct {
 	VersionCheckDisabled      bool             `env:"VERSION_CHECK_DISABLED"`
 	StaticApiKey              string           `env:"STATIC_API_KEY" options:"file"`
 	CIMDEnabled               bool             `env:"CIMD_ENABLED"`
+	DCREnabled                bool             `env:"DCR_ENABLED"`
 
 	FileBackend                     string `env:"FILE_BACKEND" options:"toLower"`
 	UploadPath                      string `env:"UPLOAD_PATH"`
