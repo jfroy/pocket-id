@@ -248,7 +248,10 @@ Migrations for postgres and sqlite mirroring the CIMD migration style
 ### 6.5 Configuration
 
 - New env `DCR_ENABLED` (bool, default false), added to
-  `internal/common/env_config.go` beside `CIMDEnabled`.
+  `internal/common/env_config.go` beside `CIMDEnabled`. It is surfaced to the
+  frontend as a `dcrEnabled` boolean in the app-config response (both the public
+  and `/all` variants), injected in `app_config_controller.go` exactly like
+  `cimdEnabled`.
 - New app-config value `dynamicClientRedirectUriAllowlist` wired through the
   actor-based `appconfig` package (model field + default `"[]"`, a
   `GetDynamicClientRedirectUriAllowlist()` helper, and DTO/validation mirroring
@@ -262,7 +265,9 @@ Migrations for postgres and sqlite mirroring the CIMD migration style
   CIMD), groups and Pocket ID features editable.
 - Admin application-configuration: add a control for
   `dynamicClientRedirectUriAllowlist` in the dynamic-clients config form
-  introduced by CIMD.
+  introduced by CIMD. The control renders (and its value is submitted) **only
+  when `dcrEnabled` is true**, mirroring how the CIMD allowlist control is gated
+  on `cimdEnabled` — a hidden field must not push a stale value.
 
 ### 6.7 fosite
 
