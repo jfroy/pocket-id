@@ -56,6 +56,7 @@ export type AllAppConfig = AppConfig & {
 	// Dynamic clients (e.g. CIMD)
 	cimdUrlAllowlist: string[];
 	dynamicClientRetentionDays: number;
+	dynamicClientRedirectUriAllowlist: string[];
 };
 
 export type AppConfigRawResponse = {

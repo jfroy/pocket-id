@@ -20,6 +20,9 @@
 	} = $props();
 
 	let cimdUrlAllowlist: string[] = $derived(appConfig.cimdUrlAllowlist || []);
+	let dynamicClientRedirectUriAllowlist: string[] = $derived(
+		appConfig.dynamicClientRedirectUriAllowlist || []
+	);
 	let isLoading = $state(false);
 
 	const formSchema = z.object({
@@ -42,6 +45,9 @@
 		if ($appConfigStore.cimdEnabled) {
 			update.cimdUrlAllowlist = cimdUrlAllowlist.filter((u) => u.trim() !== '');
 		}
+		update.dynamicClientRedirectUriAllowlist = dynamicClientRedirectUriAllowlist.filter(
+			(u) => u.trim() !== ''
+		);
 
 		await callback(update).finally(() => (isLoading = false));
 		toast.success(m.application_configuration_updated_successfully());
@@ -66,6 +72,17 @@
 				<UrlListInput bind:urls={cimdUrlAllowlist} testIdPrefix="cimd-url-allowlist" />
 			</Field.Field>
 		{/if}
+
+		<Field.Field>
+			<Field.Label>{m.dynamic_client_redirect_uri_allowlist()}</Field.Label>
+			<Field.Description>
+				{m.dynamic_client_redirect_uri_allowlist_description()}
+			</Field.Description>
+			<UrlListInput
+				bind:urls={dynamicClientRedirectUriAllowlist}
+				testIdPrefix="dynamic-client-redirect-uri-allowlist"
+			/>
+		</Field.Field>
 
 		<div class="flex justify-end pt-2">
 			<Button {isLoading} type="submit">{m.save()}</Button>
