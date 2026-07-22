@@ -15,6 +15,7 @@ export type AppConfig = {
 	requireUserEmail: boolean;
 	tracingEnabled: boolean;
 	cimdEnabled: boolean;
+	dcrEnabled: boolean;
 };
 
 export type AllAppConfig = AppConfig & {

@@ -86,6 +86,13 @@ func (acc *AppConfigController) listAppConfigHandler(c *gin.Context) {
 		Type:  "boolean",
 	})
 
+	// Manually add dcrEnabled which isn't in the database but defined with an environment variable
+	configVariablesDto = append(configVariablesDto, dto.PublicAppConfigVariableDto{
+		Key:   "dcrEnabled",
+		Value: strconv.FormatBool(common.EnvConfig.DCREnabled),
+		Type:  "boolean",
+	})
+
 	c.JSON(http.StatusOK, configVariablesDto)
 }
 
@@ -115,6 +122,15 @@ func (acc *AppConfigController) listAllAppConfigHandler(c *gin.Context) {
 		PublicAppConfigVariableDto: dto.PublicAppConfigVariableDto{
 			Key:   "cimdEnabled",
 			Value: strconv.FormatBool(common.EnvConfig.CIMDEnabled),
+			Type:  "boolean",
+		},
+		IsPublic: true,
+	})
+
+	configVariablesDto = append(configVariablesDto, dto.AppConfigVariableDto{
+		PublicAppConfigVariableDto: dto.PublicAppConfigVariableDto{
+			Key:   "dcrEnabled",
+			Value: strconv.FormatBool(common.EnvConfig.DCREnabled),
 			Type:  "boolean",
 		},
 		IsPublic: true,
