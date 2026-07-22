@@ -3,6 +3,7 @@
 package service
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,6 +13,7 @@ import (
 	"github.com/pocket-id/pocket-id/backend/internal/common"
 	"github.com/pocket-id/pocket-id/backend/internal/dto"
 	"github.com/pocket-id/pocket-id/backend/internal/model"
+	"github.com/pocket-id/pocket-id/backend/internal/storage"
 	testutils "github.com/pocket-id/pocket-id/backend/internal/utils/testing"
 )
 
@@ -62,6 +64,81 @@ func TestRegisterDynamicClient(t *testing.T) {
 			RedirectURIs: []string{"https://evil.example.com/cb"},
 		})
 		require.Error(t, err)
+	})
+}
+
+// TestRegisterDynamicClient_LogoURI exercises the logo_uri wiring added to
+// RegisterDynamicClient and UpdateDynamicClient: a served logo_uri is
+// downloaded (via the same SSRF-guarded downloadAndSaveLogoFromURL used by
+// CreateClient) and stored against the new client, best-effort. The SSRF
+// guard itself, redirect handling, size limits, etc. are already covered
+// by TestOidcService_downloadAndSaveLogoFromURL; this test only asserts the
+// new call site wires things together correctly.
+func TestRegisterDynamicClient_LogoURI(t *testing.T) {
+	const publicLogoHost = "https://8.8.8.8"
+
+	original := common.EnvConfig
+	t.Cleanup(func() { common.EnvConfig = original })
+	common.EnvConfig.UiConfigDisabled = true
+
+	db := testutils.NewDatabaseForTest(t)
+
+	cfg := appconfig.NewTestConfig(nil)
+	cfg.DynamicClientRedirectUriAllowlist = appconfig.AppConfigValue(`["https://app.example.com/**"]`)
+	appConfigService := appconfig.NewTestAppConfigService(cfg)
+
+	dbStorage, err := storage.NewDatabaseStorage(db)
+	require.NoError(t, err)
+
+	t.Run("a served logo_uri is downloaded and stored on the client", func(t *testing.T) {
+		pngContent := []byte("fake-png-content")
+		//nolint:bodyclose
+		pngResponse := testutils.NewMockResponse(http.StatusOK, string(pngContent))
+		pngResponse.Header.Set("Content-Type", "image/png")
+
+		httpClient := &http.Client{
+			Transport: &testutils.MockRoundTripper{
+				Responses: map[string]*http.Response{
+					//nolint:bodyclose
+					publicLogoHost + "/logo.png": pngResponse,
+				},
+			},
+		}
+
+		svc, err := NewOidcService(db, nil, appConfigService, nil, nil, nil, httpClient, dbStorage)
+		require.NoError(t, err)
+
+		client, _, _, err := svc.RegisterDynamicClient(t.Context(), dto.OidcClientRegistrationRequestDto{
+			RedirectURIs:            []string{"https://app.example.com/cb"},
+			ClientName:              "Client With Logo",
+			TokenEndpointAuthMethod: "client_secret_basic",
+			LogoURI:                 publicLogoHost + "/logo.png",
+		})
+		require.NoError(t, err)
+
+		var stored model.OidcClient
+		require.NoError(t, db.First(&stored, "id = ?", client.ID).Error)
+		assert.True(t, stored.HasLogo())
+		require.NotNil(t, stored.ImageType)
+		assert.Equal(t, "png", *stored.ImageType)
+	})
+
+	t.Run("a logo_uri that fails to download does not fail registration", func(t *testing.T) {
+		svc, err := NewOidcService(db, nil, appConfigService, nil, nil, nil, http.DefaultClient, dbStorage)
+		require.NoError(t, err)
+
+		client, _, _, err := svc.RegisterDynamicClient(t.Context(), dto.OidcClientRegistrationRequestDto{
+			RedirectURIs:            []string{"https://app.example.com/cb"},
+			ClientName:              "Client With Bad Logo",
+			TokenEndpointAuthMethod: "client_secret_basic",
+			LogoURI:                 "http://127.0.0.1/logo.png", // rejected by the SSRF guard
+		})
+		require.NoError(t, err)
+		assert.NotEmpty(t, client.ID)
+
+		var stored model.OidcClient
+		require.NoError(t, db.First(&stored, "id = ?", client.ID).Error)
+		assert.False(t, stored.HasLogo())
 	})
 }
 

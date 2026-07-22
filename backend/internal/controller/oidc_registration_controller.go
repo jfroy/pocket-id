@@ -8,6 +8,7 @@ import (
 
 	"github.com/pocket-id/pocket-id/backend/internal/common"
 	"github.com/pocket-id/pocket-id/backend/internal/dto"
+	"github.com/pocket-id/pocket-id/backend/internal/model"
 	"github.com/pocket-id/pocket-id/backend/internal/service"
 )
 
@@ -33,6 +34,30 @@ func (rc *OidcRegistrationController) registrationClientURI(id string) string {
 	return common.EnvConfig.AppURL + "/api/oidc/register/" + id
 }
 
+// dynamicClientMetadataResponse builds the portion of the RFC 7591/7592 response
+// metadata that is synthesized from the stored model.OidcClient rather than
+// persisted directly. Pocket ID does not store grant_types/response_types/scope
+// as columns; a dynamic client's capabilities are always the same fixed set
+// (authorization_code + refresh_token grants, code response type), and its
+// token_endpoint_auth_method is derived from IsPublic. Callers add any
+// operation-specific fields (client_secret, registration_access_token,
+// client_id_issued_at) on top of the returned value.
+func (rc *OidcRegistrationController) dynamicClientMetadataResponse(client model.OidcClient) dto.OidcClientRegistrationResponseDto {
+	tokenEndpointAuthMethod := "client_secret_basic"
+	if client.IsPublic {
+		tokenEndpointAuthMethod = "none"
+	}
+	return dto.OidcClientRegistrationResponseDto{
+		ClientID:                client.ID,
+		ClientName:              client.Name,
+		RedirectURIs:            []string(client.CallbackURLs),
+		GrantTypes:              []string{"authorization_code", "refresh_token"},
+		ResponseTypes:           []string{"code"},
+		TokenEndpointAuthMethod: tokenEndpointAuthMethod,
+		RegistrationClientURI:   rc.registrationClientURI(client.ID),
+	}
+}
+
 func (rc *OidcRegistrationController) registerHandler(c *gin.Context) {
 	if !common.EnvConfig.DCREnabled {
 		c.JSON(http.StatusForbidden, gin.H{"error": "access_denied", "error_description": "dynamic client registration is disabled"})
@@ -53,16 +78,12 @@ func (rc *OidcRegistrationController) registerHandler(c *gin.Context) {
 		}
 		return
 	}
-	c.JSON(http.StatusCreated, dto.OidcClientRegistrationResponseDto{
-		ClientID:                client.ID,
-		ClientSecret:            secret,
-		ClientName:              client.Name,
-		RedirectURIs:            []string(client.CallbackURLs),
-		ClientIDIssuedAt:        client.CreatedAt.ToTime().Unix(), // model.Base.CreatedAt is datatype.DateTime
-		ClientSecretExpiresAt:   0,
-		RegistrationAccessToken: regToken,
-		RegistrationClientURI:   rc.registrationClientURI(client.ID),
-	})
+	resp := rc.dynamicClientMetadataResponse(client)
+	resp.ClientSecret = secret
+	resp.ClientIDIssuedAt = client.CreatedAt.ToTime().Unix() // model.Base.CreatedAt is datatype.DateTime
+	resp.ClientSecretExpiresAt = 0
+	resp.RegistrationAccessToken = regToken
+	c.JSON(http.StatusCreated, resp)
 }
 
 // bearerToken extracts the registration access token from the Authorization header.
@@ -86,12 +107,7 @@ func (rc *OidcRegistrationController) getHandler(c *gin.Context) {
 		}
 		return
 	}
-	c.JSON(http.StatusOK, dto.OidcClientRegistrationResponseDto{
-		ClientID:              client.ID,
-		ClientName:            client.Name,
-		RedirectURIs:          []string(client.CallbackURLs),
-		RegistrationClientURI: rc.registrationClientURI(client.ID),
-	})
+	c.JSON(http.StatusOK, rc.dynamicClientMetadataResponse(client))
 }
 
 func (rc *OidcRegistrationController) updateHandler(c *gin.Context) {
@@ -114,13 +130,9 @@ func (rc *OidcRegistrationController) updateHandler(c *gin.Context) {
 		}
 		return
 	}
-	c.JSON(http.StatusOK, dto.OidcClientRegistrationResponseDto{
-		ClientID:              client.ID,
-		ClientSecret:          secret,
-		ClientName:            client.Name,
-		RedirectURIs:          []string(client.CallbackURLs),
-		RegistrationClientURI: rc.registrationClientURI(client.ID),
-	})
+	resp := rc.dynamicClientMetadataResponse(client)
+	resp.ClientSecret = secret
+	c.JSON(http.StatusOK, resp)
 }
 
 func (rc *OidcRegistrationController) deleteHandler(c *gin.Context) {

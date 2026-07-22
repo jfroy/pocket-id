@@ -67,6 +67,33 @@ func TestRegistrationEndpoint(t *testing.T) {
 		assert.NotEmpty(t, doc.ClientSecret)
 		assert.NotEmpty(t, doc.RegistrationAccessToken)
 		assert.Contains(t, doc.RegistrationClientURI, doc.ClientID)
+
+		// Synthesized DCR response metadata: derived from the stored model,
+		// not persisted verbatim from the request.
+		assert.Equal(t, "client_secret_basic", doc.TokenEndpointAuthMethod)
+		assert.ElementsMatch(t, []string{"authorization_code", "refresh_token"}, doc.GrantTypes)
+		assert.Contains(t, doc.ResponseTypes, "code")
+		assert.Equal(t, []string{"https://app.example.com/cb"}, doc.RedirectURIs)
+	})
+
+	t.Run("registers a public client with token_endpoint_auth_method none", func(t *testing.T) {
+		body := `{"redirect_uris":["https://app.example.com/cb"],"client_name":"Public","token_endpoint_auth_method":"none"}`
+		resp := post(t, "/api/oidc/register", body)
+		require.Equal(t, http.StatusCreated, resp.Code)
+		var doc dto.OidcClientRegistrationResponseDto
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &doc))
+		assert.Equal(t, "none", doc.TokenEndpointAuthMethod)
+		assert.ElementsMatch(t, []string{"authorization_code", "refresh_token"}, doc.GrantTypes)
+		assert.Contains(t, doc.ResponseTypes, "code")
+	})
+
+	t.Run("logo_uri pointing at a private/loopback address does not fail registration", func(t *testing.T) {
+		body := `{"redirect_uris":["https://app.example.com/cb"],"client_name":"C","token_endpoint_auth_method":"client_secret_basic","logo_uri":"http://127.0.0.1/logo.png"}`
+		resp := post(t, "/api/oidc/register", body)
+		require.Equal(t, http.StatusCreated, resp.Code)
+		var doc dto.OidcClientRegistrationResponseDto
+		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &doc))
+		assert.NotEmpty(t, doc.ClientID)
 	})
 
 	t.Run("returns 403 when DCR is disabled", func(t *testing.T) {
@@ -136,6 +163,12 @@ func TestRegistrationClientConfigurationEndpoint(t *testing.T) {
 		var doc dto.OidcClientRegistrationResponseDto
 		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &doc))
 		assert.Equal(t, confidential.ClientID, doc.ClientID)
+
+		// Synthesized DCR response metadata, consistent with the register response.
+		assert.Equal(t, "client_secret_basic", doc.TokenEndpointAuthMethod)
+		assert.ElementsMatch(t, []string{"authorization_code", "refresh_token"}, doc.GrantTypes)
+		assert.Contains(t, doc.ResponseTypes, "code")
+		assert.Equal(t, []string{"https://app.example.com/cb"}, doc.RedirectURIs)
 	})
 
 	t.Run("GET with a wrong bearer token returns 401", func(t *testing.T) {
@@ -160,6 +193,7 @@ func TestRegistrationClientConfigurationEndpoint(t *testing.T) {
 	t.Run("PUT switching a public client to client_secret_basic returns a new client_secret", func(t *testing.T) {
 		public := register(t, `{"redirect_uris":["https://app.example.com/cb"],"client_name":"Public","token_endpoint_auth_method":"none"}`)
 		require.Empty(t, public.ClientSecret)
+		assert.Equal(t, "none", public.TokenEndpointAuthMethod)
 
 		publicPath := "/api/oidc/register/" + public.ClientID
 		resp := do(t, http.MethodPut, publicPath, public.RegistrationAccessToken,
@@ -168,6 +202,13 @@ func TestRegistrationClientConfigurationEndpoint(t *testing.T) {
 		var doc dto.OidcClientRegistrationResponseDto
 		require.NoError(t, json.Unmarshal(resp.Body.Bytes(), &doc))
 		assert.NotEmpty(t, doc.ClientSecret)
+
+		// Synthesized DCR response metadata reflects the post-update state
+		// (now confidential), consistent with register/GET.
+		assert.Equal(t, "client_secret_basic", doc.TokenEndpointAuthMethod)
+		assert.ElementsMatch(t, []string{"authorization_code", "refresh_token"}, doc.GrantTypes)
+		assert.Contains(t, doc.ResponseTypes, "code")
+		assert.Equal(t, []string{"https://app.example.com/cb"}, doc.RedirectURIs)
 	})
 
 	t.Run("DELETE with a valid token removes the client, subsequent GET returns 401", func(t *testing.T) {

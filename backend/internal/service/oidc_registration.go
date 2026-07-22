@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -59,6 +60,19 @@ func (s *OidcService) RegisterDynamicClient(ctx context.Context, input dto.OidcC
 
 	if err := s.db.WithContext(ctx).Create(&client).Error; err != nil {
 		return model.OidcClient{}, "", "", err
+	}
+
+	// Storage operations must run outside of the DB transaction/create above.
+	// The logo_uri is best-effort: a bad or unreachable URL (including one
+	// rejected by the SSRF guard in downloadAndSaveLogoFromURL) must not fail
+	// registration.
+	if input.LogoURI != "" {
+		if err := s.downloadAndSaveLogoFromURL(ctx, client.ID, input.LogoURI, true); err != nil {
+			slog.WarnContext(ctx, "Failed to download dynamic client logo from logo_uri, continuing without a logo",
+				slog.String("client_id", client.ID),
+				slog.Any("error", err),
+			)
+		}
 	}
 
 	return client, clientSecret, regToken, nil
@@ -135,6 +149,20 @@ func (s *OidcService) UpdateDynamicClient(ctx context.Context, clientID, token s
 	if err := s.db.WithContext(ctx).Save(&client).Error; err != nil {
 		return model.OidcClient{}, "", err
 	}
+
+	// Storage operations must run outside of the DB transaction/save above.
+	// The logo_uri is best-effort: a bad or unreachable URL (including one
+	// rejected by the SSRF guard in downloadAndSaveLogoFromURL) must not fail
+	// the update.
+	if input.LogoURI != "" {
+		if err := s.downloadAndSaveLogoFromURL(ctx, client.ID, input.LogoURI, true); err != nil {
+			slog.WarnContext(ctx, "Failed to download dynamic client logo from logo_uri, continuing without a logo",
+				slog.String("client_id", client.ID),
+				slog.Any("error", err),
+			)
+		}
+	}
+
 	return client, clientSecret, nil
 }
 
