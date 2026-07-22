@@ -308,6 +308,7 @@
 	"client_type": "Type",
 	"client_type_standard": "Standard",
 	"client_type_metadata_document": "Metadata Document",
+	"client_type_dynamic": "Dynamic",
 	"client_id_metadata_documents": "Client ID Metadata Documents",
 	"configure_cimd_allowlist": "Restrict which client ID metadata document URLs are accepted. Supports wildcards. An empty list blocks all URLs.",
 	"cimd_url_allowlist": "Allowed metadata document URLs",

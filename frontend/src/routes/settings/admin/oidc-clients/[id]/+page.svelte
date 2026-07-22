@@ -41,6 +41,10 @@
 	let showAllDetails = $state(false);
 	let showPreview = $state(false);
 
+	// Self-managed clients (CIMD, dynamically registered) have their basic data
+	// sourced externally and are read-only in the admin UI.
+	const isSelfManaged = $derived(client.clientType === 'cimd' || client.clientType === 'dynamic');
+
 	const oidcService = new OidcService();
 	const scimService = new ScimService();
 	const backNavigation = backNavigate('/settings/admin/oidc-clients');
@@ -316,7 +320,7 @@
 			</Card.Content>
 		</Card.Root>
 
-		{#if client.clientType === 'standard'}
+		{#if !isSelfManaged}
 			<Card.Root>
 				<Card.Content>
 					<OidcForm mode="update" existingClient={client} callback={updateClient} />
