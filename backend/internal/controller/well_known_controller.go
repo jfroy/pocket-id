@@ -18,7 +18,11 @@ import (
 // @Description Initializes OIDC discovery and JWKS endpoints
 // @Tags Well Known
 func NewWellKnownController(group *gin.RouterGroup, jwtService *service.JwtService) {
-	wkc := &WellKnownController{jwtService: jwtService}
+	wkc := &WellKnownController{
+		jwtService:     jwtService,
+		appURL:         common.EnvConfig.AppURL,
+		internalAppURL: common.EnvConfig.InternalAppURL,
+	}
 
 	// Pre-compute the OIDC configuration document, which is static
 	var err error
@@ -43,9 +47,11 @@ func NewWellKnownController(group *gin.RouterGroup, jwtService *service.JwtServi
 }
 
 type WellKnownController struct {
-	jwtService    *service.JwtService
-	oidcConfig    []byte
-	oauthASConfig []byte
+	jwtService     *service.JwtService
+	appURL         string
+	internalAppURL string
+	oidcConfig     []byte
+	oauthASConfig  []byte
 }
 
 // jwksHandler godoc
@@ -88,8 +94,8 @@ func (wkc *WellKnownController) oauthAuthorizationServerHandler(c *gin.Context) 
 // computeBaseMetadata returns the set of metadata fields shared between the OpenID Connect
 // discovery document and the RFC 8414 OAuth 2.0 Authorization Server metadata document.
 func (wkc *WellKnownController) computeBaseMetadata() (map[string]any, error) {
-	appUrl := common.EnvConfig.AppURL
-	internalAppUrl := common.EnvConfig.InternalAppURL
+	appUrl := wkc.appURL
+	internalAppUrl := wkc.internalAppURL
 
 	alg, err := wkc.jwtService.GetKeyAlg()
 	if err != nil {
@@ -126,11 +132,8 @@ func (wkc *WellKnownController) computeOIDCConfiguration() ([]byte, error) {
 		return nil, err
 	}
 
-	appUrl := common.EnvConfig.AppURL
-	internalAppUrl := common.EnvConfig.InternalAppURL
-
-	config["userinfo_endpoint"] = internalAppUrl + "/api/oidc/userinfo"
-	config["end_session_endpoint"] = appUrl + "/api/oidc/end-session"
+	config["userinfo_endpoint"] = wkc.internalAppURL + "/api/oidc/userinfo"
+	config["end_session_endpoint"] = wkc.appURL + "/api/oidc/end-session"
 	config["claims_supported"] = []string{"sub", "given_name", "family_name", "name", "display_name", "email", "email_verified", "preferred_username", "picture", "groups", "auth_time", "amr"}
 	config["request_parameter_supported"] = true
 	config["request_uri_parameter_supported"] = false
