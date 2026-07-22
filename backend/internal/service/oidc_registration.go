@@ -6,6 +6,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/pocket-id/pocket-id/backend/internal/common"
 	"github.com/pocket-id/pocket-id/backend/internal/dto"
 	"github.com/pocket-id/pocket-id/backend/internal/model"
 	datatype "github.com/pocket-id/pocket-id/backend/internal/model/types"
@@ -65,6 +66,67 @@ func (s *OidcService) RegisterDynamicClient(ctx context.Context, input dto.OidcC
 	}
 
 	return client, clientSecret, regToken, nil
+}
+
+// authenticateDynamicClient loads a client by ID and verifies that it is a
+// dynamically-registered client whose registration access token matches the
+// provided plaintext token. It is the shared authentication gate for the RFC
+// 7592 client-configuration endpoints (GET/PUT/DELETE).
+func (s *OidcService) authenticateDynamicClient(ctx context.Context, clientID, token string) (model.OidcClient, error) {
+	var client model.OidcClient
+	if err := s.db.WithContext(ctx).First(&client, "id = ?", clientID).Error; err != nil {
+		return model.OidcClient{}, err
+	}
+	if !client.IsDynamic() || client.RegistrationAccessTokenHash == nil {
+		return model.OidcClient{}, &common.ValidationError{Message: "client is not a dynamically registered client"}
+	}
+	if bcrypt.CompareHashAndPassword([]byte(*client.RegistrationAccessTokenHash), []byte(token)) != nil {
+		return model.OidcClient{}, &common.ValidationError{Message: "invalid registration access token"}
+	}
+	return client, nil
+}
+
+// GetDynamicClient implements RFC 7592 client configuration retrieval: it
+// authenticates the caller via the registration access token and returns the
+// current client configuration.
+func (s *OidcService) GetDynamicClient(ctx context.Context, clientID, token string) (model.OidcClient, error) {
+	return s.authenticateDynamicClient(ctx, clientID, token)
+}
+
+// UpdateDynamicClient implements RFC 7592 client configuration update: it
+// authenticates the caller, re-validates the requested redirect URIs against
+// the configured allowlist, and persists the updated client metadata.
+func (s *OidcService) UpdateDynamicClient(ctx context.Context, clientID, token string, input dto.OidcClientRegistrationRequestDto) (model.OidcClient, error) {
+	client, err := s.authenticateDynamicClient(ctx, clientID, token)
+	if err != nil {
+		return model.OidcClient{}, err
+	}
+	allowlist := s.appConfigService.GetDynamicClientRedirectUriAllowlist()
+	if err := oidc.ValidateRegistrationRedirectURIs(input.RedirectURIs, allowlist); err != nil {
+		return model.OidcClient{}, err
+	}
+	client.Name = input.ClientName
+	client.CallbackURLs = model.UrlList(input.RedirectURIs)
+	client.IsPublic = input.TokenEndpointAuthMethod == "none"
+	client.PkceEnabled = client.IsPublic
+	if retention := s.appConfigService.GetDynamicClientRetention(); retention > 0 {
+		expires := datatype.DateTime(time.Now().Add(retention))
+		client.MetadataExpiresAt = &expires
+	}
+	if err := s.db.WithContext(ctx).Save(&client).Error; err != nil {
+		return model.OidcClient{}, err
+	}
+	return client, nil
+}
+
+// DeleteDynamicClient implements RFC 7592 client configuration deletion: it
+// authenticates the caller and removes the client.
+func (s *OidcService) DeleteDynamicClient(ctx context.Context, clientID, token string) error {
+	client, err := s.authenticateDynamicClient(ctx, clientID, token)
+	if err != nil {
+		return err
+	}
+	return s.db.WithContext(ctx).Delete(&client).Error
 }
 
 // generateRegistrationAccessToken creates a new random registration access token
